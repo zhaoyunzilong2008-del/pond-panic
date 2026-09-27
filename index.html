@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Pond Panic</title>
+<style>
+  :root{
+    --cream:#f5edcf; --ink:#101317; --gold:#f2b84a; --red:#e76855;
+    --blue:#66c7ea; --green:#7bd389; --purple:#b79ae8;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#091116;color:var(--cream);font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+  body{display:flex;align-items:center;justify-content:center}
+  #wrap{position:relative;width:min(100vw,900px);height:100vh;overflow:hidden;background:#0c151b}
+  canvas{display:block;width:100%;height:100%;touch-action:none}
+  .overlay{position:absolute;inset:0;z-index:5;display:flex;align-items:center;justify-content:center;padding:22px;background:rgba(6,10,13,.9)}
+  .card{width:min(94%,620px);background:#f1e5c8;color:#121619;border:5px solid #121619;border-radius:20px;padding:22px;box-shadow:0 10px 0 #000}
+  h1{font-size:clamp(44px,9vw,74px);line-height:.88;margin:0;letter-spacing:-3px;text-transform:uppercase}
+  .tag{font-weight:900;letter-spacing:2px;text-transform:uppercase;color:#8f332b;margin-bottom:14px}
+  p{line-height:1.42}
+  .legend{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0}
+  .pill{border:2px solid #121619;border-radius:11px;padding:9px;background:#fff7df;font-size:14px}
+  button{border:3px solid #121619;background:var(--gold);color:#121619;border-radius:12px;padding:13px 16px;font-size:18px;font-weight:900;cursor:pointer;box-shadow:0 5px 0 #121619}
+  button:active{transform:translateY(3px);box-shadow:0 2px 0 #121619}
+  .overlay button{width:100%}
+  .small{font-size:13px;opacity:.8}
+  .hidden{display:none}
+  #controls{position:absolute;left:0;right:0;bottom:10px;z-index:3;display:flex;justify-content:center;gap:10px;padding:0 12px;pointer-events:auto}
+  #controls button{min-width:88px;background:rgba(241,229,200,.92);font-size:21px;padding:10px 14px}
+  #castBtn{min-width:128px!important;background:#f2b84a!important}
+  #hint{position:absolute;left:0;right:0;bottom:68px;z-index:2;text-align:center;font-size:11px;font-weight:800;opacity:.65;pointer-events:none}
+  @media (min-width:700px){#controls{opacity:.7}}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game"></canvas>
+
+  <div id="start" class="overlay">
+    <div class="card">
+      <div class="tag">Wintercow's Arcade • Kaiser Zhao</div>
+      <h1>Pond<br>Panic</h1>
+      <p><b>Grab fish before everyone else does.</b> The catch is that everybody is fishing from the same pond, and the fewer fish that remain, the harder it becomes for the pond to recover.</p>
+      <div class="legend">
+        <div class="pill"><b>🐟 Fish</b><br>Catch them for cash. Scarcer fish become more valuable.</div>
+        <div class="pill"><b>✨ Golden Fish</b><br>Rare, fast, and worth a huge bonus.</div>
+        <div class="pill"><b>🚤 Rival Boats</b><br>They keep fishing too. You do not control them.</div>
+        <div class="pill"><b>🌱 Pond Health</b><br>A healthy pond reproduces quickly. A depleted pond struggles.</div>
+      </div>
+      <p class="small">Move with A/D or ←/→. Press Space to cast your net. On phone, use the buttons. Try to beat your score without crashing the fish population.</p>
+      <button id="startBtn">START FISHING</button>
+    </div>
+  </div>
+
+  <div id="end" class="overlay hidden">
+    <div class="card">
+      <div class="tag">Fishing Day Complete</div>
+      <h1 id="endTitle">POND SURVIVED</h1>
+      <p id="results"></p>
+      <p><b>What happened?</b> Every fisher had a reason to catch fish before somebody else did, but everyone shared the cost of a depleted pond. As the fish became scarce, their price rose, which made catching the remaining fish even more tempting.</p>
+      <p class="small">That is the economic tension in the game: an individually rewarding choice can create a worse shared outcome when access to a resource is open and nobody owns the long-term stock.</p>
+      <button id="restartBtn">FISH AGAIN</button>
+    </div>
+  </div>
+
+  <div id="hint">MOVE • CAST • KEEP AN EYE ON THE POND</div>
+  <div id="controls">
+    <button id="leftBtn" aria-label="Move left">◀</button>
+    <button id="castBtn" aria-label="Cast net">CAST</button>
+    <button id="rightBtn" aria-label="Move right">▶</button>
+  </div>
+</div>
+
+<script>
+(() => {
+const canvas=document.getElementById('game');
+const ctx=canvas.getContext('2d');
+const wrap=document.getElementById('wrap');
+const start=document.getElementById('start');
+const end=document.getElementById('end');
+const results=document.getElementById('results');
+const endTitle=document.getElementById('endTitle');
+
+let W=0,H=0,dpr=1;
+function resize(){
+  const r=wrap.getBoundingClientRect();
+  W=r.width;H=r.height;dpr=Math.min(window.devicePixelRatio||1,2);
+  canvas.width=Math.floor(W*dpr);canvas.height=Math.floor(H*dpr);
+  canvas.style.width=W+'px';canvas.style.height=H+'px';
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+addEventListener('resize',resize);resize();
+
+const keys={left:false,right:false};
+let running=false,last=0,timeLeft=75,score=0,cash=0,catches=0,bestCombo=0,combo=0;
+let pond=100,fish=[],rivals=[],particles=[],splashes=[],net=null;
+let player={x:W/2,y:H-125,w:88,h:34,speed:340};
+let rivalTimer=0,spawnTimer=0,goldenTimer=0;
+
+const rand=(a,b)=>a+Math.random()*(b-a);
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+
+function roundRect(x,y,w,h,r,fill,stroke){
+  ctx.beginPath();ctx.roundRect(x,y,w,h,r);
+  if(fill){ctx.fillStyle=fill;ctx.fill()}
+  if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=2;ctx.stroke()}
+}
+
+function price(){
+  return Math.round(8 + (100-pond)*0.22);
+}
+
+function reset(){
+  timeLeft=75;score=0;cash=0;catches=0;bestCombo=0;combo=0;pond=100;
+  fish=[];rivals=[];particles=[];splashes=[];net=null;
+  player={x:W/2,y:H-125,w:88,h:34,speed:340};
+  rivalTimer=.8;spawnTimer=.2;goldenTimer=8;
+  for(let i=0;i<7;i++) spawnFish(false);
+  for(let i=0;i<3;i++) rivals.push({x:W*(.2+i*.3),dir:i%2?1:-1,speed:rand(30,55),cool:rand(.8,1.8)});
+}
+function begin(){
+  reset();running=true;last=performance.now();
+  start.classList.add('hidden');end.classList.add('hidden');
+  requestAnimationFrame(loop);
+}
+document.getElementById('startBtn').onclick=begin;
+document.getElementById('restartBtn').onclick=begin;
+
+function bindHold(btn,key){
+  const down=e=>{e.preventDefault();keys[key]=true};
+  const up=e=>{e.preventDefault();keys[key]=false};
+  btn.addEventListener('pointerdown',down);
+  btn.addEventListener('pointerup',up);
+  btn.addEventListener('pointercancel',up);
+  btn.addEventListener('pointerleave',up);
+}
+bindHold(document.getElementById('leftBtn'),'left');
+bindHold(document.getElementById('rightBtn'),'right');
+document.getElementById('castBtn').addEventListener('pointerdown',e=>{e.preventDefault();cast()});
+
+addEventListener('keydown',e=>{
+  if(['ArrowLeft','a','A'].includes(e.key))keys.left=true;
+  if(['ArrowRight','d','D'].includes(e.key))keys.right=true;
+  if(e.key===' '){e.preventDefault();if(!e.repeat)cast()}
+});
+addEventListener('keyup',e=>{
+  if(['ArrowLeft','a','A'].includes(e.key))keys.left=false;
+  if(['ArrowRight','d','D'].includes(e.key))keys.right=false;
+});
+
+function spawnFish(golden=false){
+  if(pond<8 && !golden) return;
+  const y=rand(H*.33,H*.71);
+  const dir=Math.random()<.5?1:-1;
+  const size=golden?26:rand(17,24);
+  fish.push({
+    x:dir>0?-35:W+35,y,dir,size,
+    speed:golden?rand(130,175):rand(55,105),
+    golden,phase:rand(0,Math.PI*2)
+  });
+}
+
+function cast(){
+  if(!running || net) return;
+  net={x:player.x,y:player.y-12,r:10,max:95,t:0,state:'out'};
+  splashes.push({x:player.x,y:player.y-45,life:.7,r:7});
+}
+
+function pop(x,y,text,color){
+  particles.push({x,y,text,color,life:1,vy:-42});
+}
+
+function catchFish(f,index){
+  const value=f.golden?60:price();
+  cash+=value;
+  score+=f.golden?80:value+combo*2;
+  catches++;combo++;bestCombo=Math.max(bestCombo,combo);
+  pond=clamp(pond-(f.golden?2.5:4.2),0,100);
+  pop(f.x,f.y,(f.golden?'GOLD +':'$')+value,f.golden?'#f2b84a':'#7bd389');
+  fish.splice(index,1);
+}
+
+function rivalCatch(r){
+  if(fish.length===0)return;
+  let best=-1,dist=1e9;
+  for(let i=0;i<fish.length;i++){
+    if(fish[i].golden)continue;
+    const d=Math.abs(fish[i].x-r.x)+Math.abs(fish[i].y-H*.28);
+    if(d<dist){dist=d;best=i}
+  }
+  if(best>=0){
+    const f=fish[best];
+    pond=clamp(pond-3.2,0,100);
+    pop(f.x,f.y,'RIVAL CATCH','#e76855');
+    fish.splice(best,1);
+  }
+}
+
+function update(dt){
+  timeLeft-=dt;
+  if(timeLeft<=0 || pond<=0){timeLeft=Math.max(0,timeLeft);finish();return}
+
+  if(keys.left)player.x-=player.speed*dt;
+  if(keys.right)player.x+=player.speed*dt;
+  player.x=clamp(player.x,55,W-55);
+
+  const regen=(pond/100)*1.55;
+  pond=clamp(pond+regen*dt,0,100);
+
+  spawnTimer-=dt;
+  if(spawnTimer<=0){
+    if(Math.random() < pond/100) spawnFish(false);
+    spawnTimer=rand(.45,1.0)*(1.25-pond/160);
+  }
+
+  goldenTimer-=dt;
+  if(goldenTimer<=0){
+    spawnFish(true);
+    goldenTimer=rand(8,13);
+  }
+
+  for(let i=fish.length-1;i>=0;i--){
+    const f=fish[i];
+    f.phase+=dt*4;
+    f.x+=f.dir*f.speed*dt;
+    f.y+=Math.sin(f.phase)*7*dt;
+    if(f.x<-60 || f.x>W+60)fish.splice(i,1);
+  }
+
+  for(const r of rivals){
+    r.x+=r.dir*r.speed*dt;
+    if(r.x<45){r.x=45;r.dir=1}
+    if(r.x>W-45){r.x=W-45;r.dir=-1}
+    r.cool-=dt;
+    if(r.cool<=0){
+      rivalCatch(r);
+      r.cool=rand(1.1,2.2)*(1.15-pond/180);
+    }
+  }
+
+  if(net){
+    net.t+=dt;
+    if(net.state==='out'){
+      net.r+=165*dt;
+      net.y-=90*dt;
+      if(net.r>=net.max){net.r=net.max;net.state='back'}
+    }else{
+      net.r-=210*dt;
+      net.y+=120*dt;
+      if(net.r<=8){net=null;combo=0}
+    }
+    if(net){
+      for(let i=fish.length-1;i>=0;i--){
+        const f=fish[i];
+        const dx=f.x-net.x,dy=f.y-net.y;
+        if(Math.hypot(dx,dy)<net.r*.72){
+          catchFish(f,i);
+        }
+      }
+    }
+  }
+
+  for(let i=particles.length-1;i>=0;i--){
+    const p=particles[i];p.life-=dt;p.y+=p.vy*dt;if(p.life<=0)particles.splice(i,1);
+  }
+  for(let i=splashes.length-1;i>=0;i--){
+    const s=splashes[i];s.life-=dt;s.r+=40*dt;if(s.life<=0)splashes.splice(i,1);
+  }
+}
+
+function drawSky(){
+  const g=ctx.createLinearGradient(0,0,0,H*.32);
+  g.addColorStop(0,'#162839');g.addColorStop(1,'#355d66');
+  ctx.fillStyle=g;ctx.fillRect(0,0,W,H*.32);
+
+  ctx.fillStyle='#101a20';
+  for(let i=0;i<9;i++){
+    const bw=W/9+2,bh=40+(i%4)*18;
+    ctx.fillRect(i*W/9,H*.32-bh,bw,bh);
+  }
+
+  ctx.fillStyle='#82b25f';ctx.fillRect(0,H*.29,W,24);
+}
+
+function drawWater(){
+  const g=ctx.createLinearGradient(0,H*.32,0,H);
+  g.addColorStop(0,'#2c7f91');g.addColorStop(.55,'#17566f');g.addColorStop(1,'#0c3046');
+  ctx.fillStyle=g;ctx.fillRect(0,H*.32,W,H*.68);
+
+  ctx.strokeStyle='rgba(255,255,255,.12)';ctx.lineWidth=2;
+  for(let y=H*.38;y<H;y+=34){
+    ctx.beginPath();
+    for(let x=0;x<=W;x+=22){
+      const yy=y+Math.sin((x+y)*.035)*3;
+      if(x===0)ctx.moveTo(x,yy);else ctx.lineTo(x,yy);
+    }
+    ctx.stroke();
+  }
+}
+
+function drawHUD(){
+  roundRect(12,12,W-24,96,14,'rgba(7,10,12,.83)','#e4d5aa');
+  ctx.fillStyle='#f5edcf';ctx.font='700 11px system-ui';ctx.fillText('SCORE',27,37);
+  ctx.font='900 25px system-ui';ctx.fillStyle='#f2b84a';ctx.fillText(score,27,69);
+
+  ctx.fillStyle='#f5edcf';ctx.font='700 11px system-ui';ctx.fillText('FISH PRICE',W*.28,37);
+  ctx.font='900 25px system-ui';ctx.fillStyle='#7bd389';ctx.fillText('$'+price(),W*.28,69);
+
+  ctx.fillStyle='#f5edcf';ctx.font='700 11px system-ui';ctx.fillText('POND HEALTH',W*.51,37);
+  const bw=Math.min(150,W*.23),bx=W*.51,by=53;
+  ctx.fillStyle='#333b3f';ctx.fillRect(bx,by,bw,14);
+  ctx.fillStyle=pond>55?'#7bd389':pond>25?'#f2b84a':'#e76855';ctx.fillRect(bx,by,bw*(pond/100),14);
+  ctx.strokeStyle='#f5edcf';ctx.strokeRect(bx,by,bw,14);
+
+  ctx.fillStyle='#f5edcf';ctx.font='700 11px system-ui';ctx.fillText('TIME',W-92,37);
+  ctx.font='900 25px system-ui';ctx.fillStyle='#66c7ea';ctx.fillText(Math.ceil(timeLeft)+'s',W-92,69);
+}
+
+function drawFish(f){
+  ctx.save();ctx.translate(f.x,f.y);ctx.scale(f.dir,1);
+  if(f.golden){
+    ctx.shadowColor='#ffd85c';ctx.shadowBlur=18;
+    ctx.fillStyle='#ffd85c';
+  }else{
+    ctx.fillStyle='#c5edf5';
+  }
+  ctx.beginPath();ctx.ellipse(0,0,f.size*1.1,f.size*.6,0,0,Math.PI*2);ctx.fill();
+  ctx.beginPath();ctx.moveTo(-f.size*1.05,0);ctx.lineTo(-f.size*1.65,-f.size*.55);ctx.lineTo(-f.size*1.65,f.size*.55);ctx.closePath();ctx.fill();
+  ctx.fillStyle=f.golden?'#fff2a8':'#0d4657';ctx.beginPath();ctx.arc(f.size*.45,-2,3,0,Math.PI*2);ctx.fill();
+  ctx.restore();
+}
+
+function drawRivals(){
+  for(const r of rivals){
+    const y=H*.285;
+    roundRect(r.x-32,y-13,64,26,7,'#bb5c4f','#111');
+    ctx.fillStyle='#f5edcf';ctx.font='900 9px system-ui';ctx.textAlign='center';ctx.fillText('RIVAL',r.x,y+3);ctx.textAlign='start';
+  }
+}
+
+function drawPlayer(){
+  const x=player.x-player.w/2,y=player.y-player.h/2;
+  roundRect(x,y,player.w,player.h,9,'#e76855','#0b0f12');
+  ctx.fillStyle='#f5edcf';ctx.font='900 11px system-ui';ctx.textAlign='center';ctx.fillText('YOUR BOAT',player.x,player.y+4);ctx.textAlign='start';
+  ctx.fillStyle='#0b0f12';ctx.fillRect(player.x-12,y-15,24,15);
+}
+
+function drawNet(){
+  if(!net)return;
+  ctx.save();ctx.strokeStyle='rgba(245,237,207,.8)';ctx.lineWidth=2;
+  ctx.beginPath();ctx.arc(net.x,net.y,net.r,0,Math.PI*2);ctx.stroke();
+  ctx.globalAlpha=.3;
+  for(let a=0;a<Math.PI*2;a+=Math.PI/6){
+    ctx.beginPath();ctx.moveTo(net.x,net.y);ctx.lineTo(net.x+Math.cos(a)*net.r,net.y+Math.sin(a)*net.r);ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawParticles(){
+  for(const p of particles){
+    ctx.save();ctx.globalAlpha=Math.max(0,p.life);ctx.fillStyle=p.color;ctx.font='900 13px system-ui';ctx.textAlign='center';ctx.fillText(p.text,p.x,p.y);ctx.restore();
+  }
+  for(const s of splashes){
+    ctx.save();ctx.globalAlpha=Math.max(0,s.life);ctx.strokeStyle='#dff7ff';ctx.lineWidth=2;ctx.beginPath();ctx.arc(s.x,s.y,s.r,0,Math.PI*2);ctx.stroke();ctx.restore();
+  }
+}
+
+function drawWarning(){
+  if(pond<35){
+    ctx.save();
+    ctx.globalAlpha=.85;
+    roundRect(W/2-125,H*.18,250,46,10,'rgba(120,30,28,.8)','#f5edcf');
+    ctx.fillStyle='#f5edcf';ctx.font='900 13px system-ui';ctx.textAlign='center';ctx.fillText('⚠ FISH POPULATION CRASHING',W/2,H*.18+20);
+    ctx.font='600 11px system-ui';ctx.fillText('Scarcity is raising the value of each catch.',W/2,H*.18+36);
+    ctx.restore();
+  }
+}
+
+function draw(){
+  drawSky();drawWater();drawHUD();drawRivals();
+  fish.forEach(drawFish);drawNet();drawPlayer();drawParticles();drawWarning();
+}
+
+function finish(){
+  running=false;
+  let title,msg;
+  if(pond<=0){title='POND COLLAPSED';msg='The resource was exhausted before the clock ran out.'}
+  else if(pond>=55 && score>=350){title='SMART FISHER';msg='You earned a strong score while leaving enough fish for the pond to recover.'}
+  else if(pond>=30){title='BARELY SUSTAINABLE';msg='You made money, but the shared resource finished the day under heavy pressure.'}
+  else{title='TOO MUCH OF A GOOD THING';msg='The rising value of scarce fish pulled everyone toward even more harvesting.'}
+  endTitle.textContent=title;
+  results.innerHTML=`<b>Final score:</b> ${score}<br><b>Total cash:</b> $${cash}<br><b>Your catches:</b> ${catches}<br><b>Pond health:</b> ${Math.round(pond)}%<br><b>Best catch streak:</b> ${bestCombo}<br><br>${msg}`;
+  end.classList.remove('hidden');
+}
+
+function loop(t){
+  if(!running){draw();return}
+  const dt=Math.min(.033,(t-last)/1000);last=t;
+  update(dt);draw();
+  if(running)requestAnimationFrame(loop);
+}
+
+reset();draw();
+})();
+</script>
+</body>
+</html>
